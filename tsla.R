@@ -1,49 +1,49 @@
 # Load necessary libraries
 library(tidyverse)
-library(TTR)
 library(lubridate)
-library(ggplot2)
+library(TTR)
 
 # Read the data
-df <- read_csv('TSLA.csv')
+df <- read.csv('TSLA.csv')
 
 # Set the date as the index
-df <- df %>% mutate(Date = ymd(Date)) %>% arrange(Date)
+df$Date <- as.Date(df$Date)
+df <- df %>% arrange(Date)
 
-# Create a function to calculate the simple moving average 
-SMA <- function(data, period = 30, column = 'Close') {
-  return(SMA(data[[column]], n=period))
-}
+# Calculate the simple moving average 
+df$SMA <- SMA(df$Close, n=21)
 
-# Build and show the data set
-df <- df %>% mutate(
-  SMA = SMA(df, 21),
-  Simple_Returns = lag(Close / lag(Close) - 1),
-  Log_Returns = log(1 + Simple_Returns),
-  Ratios = Close / SMA
-)
+# Calculate simple and log returns
+df$Simple_Returns <- c(0, diff(df$Close) / df$Close[-length(df$Close)])
+df$Log_Returns <- log(1 + df$Simple_Returns)
+
+# Calculate ratios
+df$Ratios <- df$Close / df$SMA
 
 # Get and show the percentile values
 percentiles <- c(15, 20, 50, 80, 85)
-Ratios <- df$Ratios %>% drop_na()
-Percentile_values <- quantile(Ratios, percentiles / 100)
+Percentile_values <- quantile(df$Ratios, probs = percentiles/100, na.rm = TRUE)
 
 # Create the buy and sell signals for the strategy
 Sell <- Percentile_values['85%'] # The 85th percentile threshold where we want to sell
 Buy <- Percentile_values['15%'] # The 15th percentile threshold where we want to buy
 
-df <- df %>% mutate(
-  Positions = ifelse(Ratios > Sell, -1, ifelse(Ratios < Buy, 1, NA)),
-  Positions = fill(Positions, .direction = "down"),
-  Buy = ifelse(Positions == 1, Close, NA),
-  Sell = ifelse(Positions == -1, Close, NA)
-)
+# Put -1 where the ratio is greater than the percentile to sell and NA otherwise
+df$Positions <- ifelse(df$Ratios > Sell, -1, NA)
+
+# Put 1 where the ratio is less than the percentile to buy and put the current value otherwise
+df$Positions <- ifelse(df$Ratios < Buy, 1, df$Positions)
+
+# Use na.locf from zoo package to fill the missing values in the data frame. na.locf stands for last observation carried forward
+df$Positions <- zoo::na.locf(df$Positions, na.rm=FALSE)
+
+# Get the buy and sell signals
+df$Buy <- ifelse(df$Positions == 1, df$Close, NA)
+df$Sell <- ifelse(df$Positions == -1, df$Close, NA)
 
 # Calculate the returns for the Mean Reversion Strategy
-df <- df %>% mutate(
-  Strategy_returns = lag(Positions) * Log_Returns
-)
+df$Strategy_returns <- lag(df$Positions, default=0) * df$Log_Returns
 
 # Print the returns for both strategies
-print(paste('Buy & Hold Strategy Returns: ', exp(cumsum(df$Log_Returns, na.rm = TRUE))[[length(df$Log_Returns)]] - 1))
-print(paste('Mean Reversion Strategy Returns: ', exp(cumsum(df$Strategy_returns, na.rm = TRUE))[[length(df$Strategy_returns)]] - 1))
+print(paste('Buy & Hold Strategy Returns: ', exp(sum(df$Log_Returns, na.rm=TRUE)) - 1))
+print(paste('Mean Reversion Strategy Returns: ', exp(sum(df$Strategy_returns, na.rm=TRUE)) - 1))
